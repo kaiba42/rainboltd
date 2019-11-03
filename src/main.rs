@@ -37,7 +37,11 @@ use rainboltd::{
     message::{
         OrderRequest,
         OpenChannelRequest,
-        OpenChannelResponse
+        OpenChannelResponse,
+        PaymentRequest,
+        PaymentResponse,
+        GeneratePaymentTokenRequest,
+        GeneratePaymentTokenResponse
     }
 };
 
@@ -49,6 +53,16 @@ use rainboltd::{
 //     };
 //     reply::json(&state)
 // }
+
+fn recv_generate_payment_token_req(req: GeneratePaymentTokenRequest, maker_slot: Arc<Mutex<Option<MakerState>>>) -> GeneratePaymentTokenResponse {
+    let mut maybe_maker = maker_slot.lock().expect("Maker is not poisoned");
+    maybe_maker.as_mut().map(|maker| maker.recv_generate_payment_token_req(req)).expect("maker exists")
+}
+
+fn recv_payment_req(req: PaymentRequest, maker_slot: Arc<Mutex<Option<MakerState>>>) -> PaymentResponse {
+    let mut maybe_maker = maker_slot.lock().expect("Maker is not poisoned");
+    maybe_maker.as_mut().map(|maker| maker.recv_payment_req(req)).expect("maker exists")
+}
 
 fn open_channel_req(req: OpenChannelRequest, maker_slot: Arc<Mutex<Option<MakerState>>>) -> OpenChannelResponse {
     let mut maybe_maker = maker_slot.lock().expect("Maker is not poisoned");
@@ -75,7 +89,7 @@ fn get_channel_for_maker_order_id(maker_order_id: String) -> (ChannelState<Bls12
 }
 
 // fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, maker_slot: Arc<Mutex<Option<MakerState>>>) -> impl Future<Item=TakerState, Error=Rejection> {
-async fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, maker_slot: Arc<Mutex<Option<MakerState>>>) -> TakerState {
+fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, maker_slot: Arc<Mutex<Option<MakerState>>>) -> TakerState {
     let mut taker = taker_slot.lock().expect("Taker is not poisoned");
     if taker.is_none() {
         println!("Creating a new Taker!");
@@ -118,9 +132,24 @@ async fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, ma
     taker_state.clone()
 }
 
-// async pay(taker_slot: Arc<Mutex<Option<TakerState>>>) -> TakerState {
+fn get_taker_payment_req(taker_slot: Arc<Mutex<Option<TakerState>>>) -> PaymentRequest {
+    let mut maybe_taker = taker_slot.lock().expect("Taker is not poisoned");
+    maybe_taker
+        .as_mut()
+        .map(|taker| taker.send_payment_req())
+        .expect("taker exists")
+}
 
-// }
+fn update_taker_state_with_payment_res(taker_slot: Arc<Mutex<Option<TakerState>>>, send_payment_res: PaymentResponse) -> GeneratePaymentTokenRequest {
+    let mut maybe_taker = taker_slot.lock().expect("Taker is not poisoned");
+    maybe_taker
+        .as_mut()
+        .map(|taker| {
+            taker.recv_payment_res(send_payment_res);
+            taker.send_generate_payment_token_req()
+        })
+        .expect("taker exists")
+}
 
 lazy_static! {
     static ref TAKER_SLOT: Arc<Mutex<Option<TakerState>>> = Arc::new(Mutex::new(None));
@@ -148,11 +177,29 @@ async fn main() {
             let res = open_channel_req(req, open_channel_maker_slot.clone());
             reply::json(&res)
         });
+    
+    let recv_pay_maker_slot = MAKER_SLOT.clone();
+    let recv_pay = path!("recvPay")
+        .and(warp::body::json())
+        .map(move |req: PaymentRequest| {
+            let res = recv_payment_req(req, recv_pay_maker_slot.clone());
+            reply::json(&res)
+        });
+
+    let get_payment_token_maker_slot = MAKER_SLOT.clone();
+    let get_payment_token = path!("paymentToken")
+        .and(warp::body::json())
+        .map(move |req: GeneratePaymentTokenRequest| {
+            let res = recv_generate_payment_token_req(req, get_payment_token_maker_slot.clone());
+            reply::json(&res)
+        });
 
     let maker_path = path!("maker")
         .and(
             init_maker
             .or(open_channel)
+            .or(recv_pay)
+            .or(get_payment_token)
         );
 
     // let take_order_taker_slot = taker_slot.clone();
@@ -160,7 +207,7 @@ async fn main() {
     let take_order = path!("order")
         .and(warp::body::json())
         .and_then(|order_request: OrderRequest| async {
-            let taker_state = order(order_request, TAKER_SLOT.clone(), MAKER_SLOT.clone()).await;
+            let taker_state = order(order_request, TAKER_SLOT.clone(), MAKER_SLOT.clone());
             let client = Client::new();
             let res: OpenChannelResponse = client.post("http://localhost:3030/maker/openChannel")
                 .json(&taker_state.send_open_channel_req())
@@ -187,11 +234,46 @@ async fn main() {
     let send_payment = path!("pay")
         // .and(warp::body::json())
         .and_then(|| async {
+            let send_payment_req = get_taker_payment_req(TAKER_SLOT.clone());
+            println!("Sending payment request: {}", send_payment_req.payment_proof.amount);
+            let client = Client::new();
+            let send_payment_res: PaymentResponse = client.post("http://localhost:3030/maker/recvPay")
+                .json(&send_payment_req)
+                .send()
+                .await
+                .expect("send payment request failed")
+                .json()
+                .await
+                .expect("send payment response parsing failed");
+            
+            let generate_payment_token_req = update_taker_state_with_payment_res(TAKER_SLOT.clone(), send_payment_res);
+            let generate_payment_token_res: GeneratePaymentTokenResponse = client.post("http://localhost:3030/maker/paymentToken")
+                .json(&generate_payment_token_req)
+                .send()
+                .await
+                .expect("send generate payment token request failed")
+                .json()
+                .await
+                .expect("send generate payment token parsing failed");
+            
+            let another_taker_clone = TAKER_SLOT.clone();
+            let mut maybe_taker = another_taker_clone.lock().expect("Taker is not poisoned");
+            let taker_updated_state = maybe_taker
+                .as_mut()
+                .map(|taker| {
+                    taker.recv_generate_payment_token_res(generate_payment_token_res);
+                    taker
+                })
+                .expect("taker exists");
 
+            Ok::<TakerState, warp::Rejection>(taker_updated_state.clone())
         });
 
     let taker_path = path!("taker")
-        .and(take_order);
+        .and(
+            take_order
+            .or(send_payment)
+        );
 
     warp::serve(
         warp::post2().and(maker_path.or(taker_path))

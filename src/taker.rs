@@ -92,7 +92,7 @@ pub trait Taker {
     fn recv_open_channel_res(&mut self, res: OpenChannelResponse);
     fn send_payment_req(&mut self) -> PaymentRequest;
     fn recv_payment_res(&mut self, res: PaymentResponse);
-    fn send_generate_payment_token_req(&mut self);
+    fn send_generate_payment_token_req(&mut self) -> GeneratePaymentTokenRequest;
     fn recv_generate_payment_token_res(&mut self, res: GeneratePaymentTokenResponse);
 }   
 
@@ -215,15 +215,16 @@ impl Taker for TakerState {
         println!("generated revoke token!");
 
         // -------- Send revoke token to merchant ----- 
-        self.send_generate_payment_token_req();
+        // self.send_generate_payment_token_req();
     }
 
-    fn send_generate_payment_token_req(&mut self) {
+    fn send_generate_payment_token_req(&mut self) -> GeneratePaymentTokenRequest {
         let req = GeneratePaymentTokenRequest {
             revoke_token: self.revoke_token.clone().expect("Revoke token must be Some() to generate a payment token")
         };
         // TODO -------- Send revoke token to merchant ----- 
         println!("Generate Payment Token Request sent!");
+        req
     }
 
     fn recv_generate_payment_token_res(&mut self, res: GeneratePaymentTokenResponse) {

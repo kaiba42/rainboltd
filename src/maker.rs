@@ -99,6 +99,9 @@ impl Maker for MakerState {
             order_size
         } = req;
 
+        // Record order size
+        self.order_size = Some(order_size);
+
         // Save customer public key and Generate channel id
         self.channel_token.set_customer_pk(&customer_public_key);
         self.channel_id = Some(self.channel_token.compute_channel_id());
