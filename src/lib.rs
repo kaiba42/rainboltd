@@ -17,3 +17,4 @@ pub struct MarketData {
     pub bitcoin: MarketPrice,
     pub cosmos: MarketPrice
 }
+pub mod cosmos;
