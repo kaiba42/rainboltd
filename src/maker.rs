@@ -17,7 +17,7 @@ use bolt::{
 use ff;
 use rand;
 use pairing::bls12_381::Bls12;
-// use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use std::time::Instant;
 
 // Internal
@@ -43,6 +43,7 @@ macro_rules! measure_one_arg {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct MakerState {
     pub channel_id: Option<<Bls12 as ff::ScalarEngine>::Fr>,
     pub channel_token: ChannelToken<Bls12>,
@@ -88,6 +89,7 @@ impl Maker for MakerState {
     }
 
     fn recv_open_channel_req(&mut self, req: OpenChannelRequest) -> OpenChannelResponse {
+        println!("Open Channel Request received!");
         let rng = &mut rand::thread_rng();
         let OpenChannelRequest {
             root_commitment,

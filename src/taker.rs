@@ -18,10 +18,12 @@ use bolt::{
 use ff;
 use rand;
 use pairing::bls12_381::Bls12;
-// use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize};
 use std::time::Instant;
+use reqwest::r#async::Client;
+use http::header::{HeaderValue, CONTENT_TYPE};
+// use futures::future::Future;
 
-// Internal
 // Internal
 use crate::message::{
     OpenChannelRequest,
@@ -57,6 +59,7 @@ macro_rules! measure_two_arg {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TakerState {
     pub channel_id: <Bls12 as ff::ScalarEngine>::Fr,
     pub channel_token: ChannelToken<Bls12>,
@@ -71,12 +74,23 @@ pub struct TakerState {
     pub revoke_token: Option<RevokeToken>
 }
 
+impl warp::Reply for TakerState {
+    fn into_response(self) -> warp::reply::Response {
+        let body = serde_json::to_vec(&self).expect("TakerState failed to serialize");
+        let mut res = warp::reply::Response::new(body.into());
+        res
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        res
+    }
+}
+
 pub trait Taker {
     fn init(initial_margin: i64, order_size: i64, channel_state: ChannelState<Bls12>, channel_token: ChannelToken<Bls12>) -> Self;
     fn take_order(&mut self);
-    fn send_open_channel_req(&mut self);
+    fn send_open_channel_req(&self) -> OpenChannelRequest;
     fn recv_open_channel_res(&mut self, res: OpenChannelResponse);
-    fn send_payment_req(&mut self);
+    fn send_payment_req(&mut self) -> PaymentRequest;
     fn recv_payment_res(&mut self, res: PaymentResponse);
     fn send_generate_payment_token_req(&mut self);
     fn recv_generate_payment_token_res(&mut self, res: GeneratePaymentTokenResponse);
@@ -121,9 +135,7 @@ impl Taker for TakerState {
         self.send_open_channel_req();
     }
 
-    fn send_open_channel_req(&mut self) {
-        let rng = &mut rand::thread_rng();
-
+    fn send_open_channel_req(&self) -> OpenChannelRequest {
         // send message to Merchant
         let req = OpenChannelRequest {
             customer_public_key: self.customer_state.pk_c,
@@ -133,8 +145,9 @@ impl Taker for TakerState {
             order_size: self.order_size,
         };
 
-        // TODO implement send
+        // TODO non blocking send
         println!("Open Channel Request sent!");
+        req
     }
 
     fn recv_open_channel_res(&mut self, res: OpenChannelResponse) {
@@ -154,7 +167,7 @@ impl Taker for TakerState {
         println!("Channel established!");
     }
 
-    fn send_payment_req(&mut self) {
+    fn send_payment_req(&mut self) -> PaymentRequest {
         let rng = &mut rand::thread_rng();
         // Get open market data
         let mut open_market_state = OpenMarketState {
@@ -182,6 +195,7 @@ impl Taker for TakerState {
             payment_proof
         };
         println!("Payment Request sent!");
+        req
     }
 
     fn recv_payment_res(&mut self, res: PaymentResponse) {

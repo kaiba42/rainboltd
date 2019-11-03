@@ -1,265 +1,200 @@
 use bolt::{
-    handle_bolt_result,
-    ped92::{Commitment, CommitmentProof},
     bidirectional::{
-        init_customer,
         init_merchant,
-        establish_customer_generate_proof,
-        establish_merchant_issue_close_token,
-        establish_merchant_issue_pay_token,
-        establish_customer_final,
-        generate_payment_proof,
-        verify_payment_proof,
-        generate_revoke_token,
-        verify_revoke_token
     },
     channels::{
         ChannelState,
-        CustomerState,
-        MerchantState,
         ChannelToken
     }
 };
-use ff;
-use rand;
 use pairing::bls12_381::Bls12;
+use rand;
+// use tokio::prelude::*;
 use warp::{
     self, 
     path, 
     reply,
     Filter,
-    Reply
+    Reply,
+    reject::Rejection
 };
-use serde::{Serialize, Deserialize};
-use secp256k1;
-use std::time::Instant;
+// use futures::future::ok;
+// use async_std::future;
+use reqwest::Client;
+use std::sync::{Arc, Mutex};
+use lazy_static::lazy_static;
 
-
-macro_rules! measure_one_arg {
-    ($x: expr) => {
-        {
-            let s = Instant::now();
-            let res = $x;
-            let e = s.elapsed();
-            (res, e.as_millis())
-        };
+// Internal
+use rainboltd::{
+    taker::{
+        TakerState, 
+        Taker
+    },
+    maker::{
+        Maker,
+        MakerState
+    },
+    message::{
+        OrderRequest,
+        OpenChannelRequest,
+        OpenChannelResponse
     }
-}
+};
 
-macro_rules! measure_two_arg {
-    ($x: expr) => {
-        {
-            let s = Instant::now();
-            let (res1, res2) = $x;
-            let e = s.elapsed();
-            (res1, res2, e.as_millis())
-        };
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct MarketState {
-    // pub channel_state: ChannelState<Bls12>,
-    // pub merchant_state: MerchantState<Bls12>,
-    // pub channel_token: ChannelToken<Bls12>,
-    pub liquidity: u64,
-    pub address: String,
-}
-
-pub struct TakerState {
-    pub channel_id: <Bls12 as ff::ScalarEngine>::Fr,
-    pub channel_token: ChannelToken<Bls12>,
-    pub channel_state: ChannelState<Bls12>,
-    pub customer_state: CustomerState<Bls12>,
-    pub root_commitment: Commitment<Bls12>,
-    pub root_commitment_proof: CommitmentProof<Bls12>,
-    pub initial_margin: i64,
-    pub order_size: i64,
-    pub available_margin: i64,
-}
-
-pub struct OpenMarketState {
-    pub last_index_price: f64,
-}
-
-pub struct OpenChannelMessage {
-    pub customer_public_key: secp256k1::PublicKey,
-    pub root_commitment: Commitment<Bls12>,
-    pub root_commitment_proof: CommitmentProof<Bls12>,
-    pub margin: i64,
-    pub order_size: i64,
-}
-
-/*
-OpenChannelMessage {
-    customer_public_key: customer_state.pk_c.clone(), // send to merchant so they can update their channel state
-    root_commitment,
-    root_commitment_proof,
-    margin,
-    order_size,
-}
-*/
-
-// TODO cure floating point precision error
-fn compute_payment(market: &mut OpenMarketState, current_index_price: f64, position_size: i64) -> i64 {
-    let change_in_price = current_index_price - market.last_index_price;
-    let profit_or_loss = (position_size as f64) * change_in_price / market.last_index_price;
-    market.last_index_price = current_index_price;
-    profit_or_loss as i64
-}
-
-// fn recv_payment_req(maker_state: &mut MakerState, payment_message: PaymentMessage) {
-
+// fn get_market_state(address: String) -> impl Reply {
+//     let state = MarketState {
+//         // channel_state: ChannelState::new("Market Channel".to_string(), false),
+//         liquidity: 100,
+//         address
+//     };
+//     reply::json(&state)
 // }
 
-fn settle_contract(taker_state: &mut TakerState) {
-    let rng = &mut rand::thread_rng();
-    // Get open market data
-    let mut open_market_state = OpenMarketState {
-        last_index_price: 100.0_f64
-    };
-    let current_index_price = 110.0_f64;
-    
-    // compute payment
-    let payment = compute_payment(&mut open_market_state, current_index_price, taker_state.order_size);
-
-    // generate payment proof
-    let (payment_proof, new_customer_state, pay_time) = measure_two_arg!(
-        generate_payment_proof(
-            rng, 
-            &taker_state.channel_state, 
-            &taker_state.customer_state, 
-            payment
-        )
-    );
-    println!(">> Time to generate payment proof: {} ms", pay_time);
-
-    // ----- Send proof to merchant -----
-    // Recv new close token
-    let (new_close_token, verify_time) = measure_one_arg!(
-        verify_payment_proof(
-            rng, 
-            &taker_state.channel_state, 
-            &payment_proof, 
-            &mut merchant_state
-        )
-    );
-    println!(">> Time to verify payment proof: {} ms", verify_time);
-    // -------- Send new_close_token to customer -------
-    // Recv new close token
-    // Create new revoke token and update customer state
-    let revoke_token = generate_revoke_token(
-        &taker_state.channel_state, 
-        &mut taker_state.customer_state, 
-        new_customer_state, 
-        &new_close_token
-    );
-
-    // -------- Send revoke token to merchant ----- 
-    // Recv new revoke token 
-    // Create new pay token and update state
-    let new_pay_token_result = verify_revoke_token(
-        &revoke_token, 
-        &mut merchant_state
-    );
-    let new_pay_token = handle_bolt_result!(new_pay_token_result);
-    
-    // --------- Send new pay token to customer --------
-    // Recv and verify the pay token and update internal state
-    assert!(taker_state.customer_state.verify_pay_token(&taker_state.channel_state, &new_pay_token.unwrap()));
+fn open_channel_req(req: OpenChannelRequest, maker_slot: Arc<Mutex<Option<MakerState>>>) -> OpenChannelResponse {
+    let mut maybe_maker = maker_slot.lock().expect("Maker is not poisoned");
+    maybe_maker.as_mut().map(|maker| maker.recv_open_channel_req(req)).expect("maker exists")
 }
 
-// fn recv_open_channel_req(maker_state: &mut MakerState, open_channel_message: OpenChannelMessage) {
-
-// }
-
-fn send_open_channel_req(taker_state: &mut TakerState) {
-    let rng = &mut rand::thread_rng();
-
-    // TODO remove
-    let (mut channel_token, merchant_state, channel_state) = init_merchant(rng, &mut taker_state.channel_state, "Merchant Bob");
-
-    // send message to Merchant
-    // receive closing token   
-    let close_token = match establish_merchant_issue_close_token(
-        rng, 
-        &taker_state.channel_state, 
-        &taker_state.root_commitment, 
-        &taker_state.root_commitment_proof, 
-        &taker_state.channel_id, 
-        taker_state.initial_margin, 
-        taker_state.order_size, 
-        &merchant_state
-    ) {
-        Ok(token) => token.expect("valid close_token is empty"),
-        Err(err) => panic!("Failed - bidirectional::establish_merchant_issue_close_token(): {}", err)
+fn init_maker_state(initial_margin: i64, maker_slot: Arc<Mutex<Option<MakerState>>>) -> impl Reply {
+    let mut maker = maker_slot.lock().expect("Maker is not poisoned");
+    if maker.is_none() {
+        println!("Creating a new Maker!")
     };
-    // validate token & update taker state
-    assert!(taker_state.customer_state.verify_close_token(&taker_state.channel_state, &close_token));
-    println!("Verified close token!");
-
-    // receive payment token for pay protocol
-    let pay_token = establish_merchant_issue_pay_token(
-        rng, 
-        &taker_state.channel_state, 
-        &taker_state.root_commitment, 
-        &merchant_state
-    );
-    // validate token & update taker state
-    assert!(establish_customer_final(&mut taker_state.channel_state, &mut taker_state.customer_state, &pay_token));
-    println!("Verified payment token!");
-    println!("Channel established!");
+    reply::json(
+        maker.get_or_insert(
+            MakerState::init(initial_margin)
+        )
+    )
 }
 
-fn place_order(initial_margin: i64, channel_state: ChannelState<Bls12>, mut channel_token: ChannelToken<Bls12>, order_size: i64) -> TakerState {
+fn get_channel_for_maker_order_id(maker_order_id: String) -> (ChannelState<Bls12>, ChannelToken<Bls12>) {
     let rng = &mut rand::thread_rng();
-    let mut customer_state = init_customer(
-        rng, 
-        &mut channel_token, // Pub key of merchant, updated with Pub key of customer, Bls keys
-        initial_margin, // initial balance of customer 
-        order_size, // initial balance of the merchant 
-        "YouKnowNothing"
-    );
+    let mut channel_state = ChannelState::<Bls12>::new(String::from("Channel A -> B"), false);
+    let (channel_token, merchant_state, channel_state) = init_merchant(rng, &mut channel_state, "Merchant Bob");
+    (channel_state, channel_token)
+}
 
-    let (root_commitment, root_commitment_proof, est_time) = measure_two_arg!(
-        establish_customer_generate_proof(
-            rng, 
-            &mut channel_token, 
-            &mut customer_state
-        )
-    );
-    println!(">> Time to generate proof for establish: {} ms", est_time);
-    
-    let mut taker_state = TakerState {
-        channel_id: channel_token.compute_channel_id(),
-        channel_token,
-        channel_state,
-        customer_state,
-        root_commitment,
-        root_commitment_proof,
+// fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, maker_slot: Arc<Mutex<Option<MakerState>>>) -> impl Future<Item=TakerState, Error=Rejection> {
+async fn order(req: OrderRequest, taker_slot: Arc<Mutex<Option<TakerState>>>, maker_slot: Arc<Mutex<Option<MakerState>>>) -> TakerState {
+    let mut taker = taker_slot.lock().expect("Taker is not poisoned");
+    if taker.is_none() {
+        println!("Creating a new Taker!");
+    } else {
+        println!("Taker already has an order");
+        return taker.clone().unwrap();
+    };
+
+    let OrderRequest {
         initial_margin,
         order_size,
-        available_margin: initial_margin,
-    };
+        maker_order_id
+    } = req;
 
-    send_open_channel_req(&mut taker_state);
+    // let (channel_state, channel_token) = get_channel_for_maker_order_id(maker_order_id);
+    let maybe_maker = maker_slot
+        .lock()
+        .expect("Order failed. Maker is poisoned");
+    let channel_state = maybe_maker.as_ref().map(|maker| maker.channel_state.clone()).expect("maker exists");
+    let channel_token = maybe_maker.as_ref().map(|maker| maker.channel_token.clone()).expect("maker exists");
+    drop(maybe_maker);
 
-    taker_state
+    let taker_state = taker.get_or_insert(
+        TakerState::init(
+            initial_margin,
+            order_size,
+            channel_state,
+            channel_token
+        )
+    );
+    // let open_channel_req = taker_state.send_open_channel_req();
+
+    //     .expect("open channel request failed")
+    //     .json()
+    //     .await
+    //     .expect("open channel response parsing failed");
+        
+    // taker_state.recv_open_channel_res(res);
+    // ok(taker_state.clone())
+    taker_state.clone()
 }
 
-fn get_market_state(address: String) -> impl Reply {
-    let state = MarketState {
-        // channel_state: ChannelState::new("Market Channel".to_string(), false),
-        liquidity: 100,
-        address
-    };
-    reply::json(&state)
+// async pay(taker_slot: Arc<Mutex<Option<TakerState>>>) -> TakerState {
+
+// }
+
+lazy_static! {
+    static ref TAKER_SLOT: Arc<Mutex<Option<TakerState>>> = Arc::new(Mutex::new(None));
+    static ref MAKER_SLOT: Arc<Mutex<Option<MakerState>>> = Arc::new(Mutex::new(None));
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    // let taker_slot = Arc::new(Mutex::new(None));
+    // let maker_slot = Arc::new(Mutex::new(None));
+
+    let state = path!(String / "state").map(|id| -> String {
+        id
+    });
+
+    let init_maker_slot = MAKER_SLOT.clone();
+    let init_maker = path!("init" / i64).map(move |initial_margin| {
+        init_maker_state(initial_margin, init_maker_slot.clone())
+    });
+
+    let open_channel_maker_slot = MAKER_SLOT.clone();
+    let open_channel = path!("openChannel")
+        .and(warp::body::json())
+        .map(move |req: OpenChannelRequest| {
+            let res = open_channel_req(req, open_channel_maker_slot.clone());
+            reply::json(&res)
+        });
+
+    let maker_path = path!("maker")
+        .and(
+            init_maker
+            .or(open_channel)
+        );
+
+    // let take_order_taker_slot = taker_slot.clone();
+    // let take_order_maker_slot = maker_slot.clone();
+    let take_order = path!("order")
+        .and(warp::body::json())
+        .and_then(|order_request: OrderRequest| async {
+            let taker_state = order(order_request, TAKER_SLOT.clone(), MAKER_SLOT.clone()).await;
+            let client = Client::new();
+            let res: OpenChannelResponse = client.post("http://localhost:3030/maker/openChannel")
+                .json(&taker_state.send_open_channel_req())
+                .send()
+                .await
+                .expect("open channel request failed")
+                .json()
+                .await
+                .expect("open channel response parsing failed");
+
+            let another_taker_clone = TAKER_SLOT.clone();
+            let mut maybe_taker = another_taker_clone.lock().expect("Taker is not poisoned");
+            let taker_updated_state = maybe_taker
+                .as_mut()
+                .map(|taker| {
+                    taker.recv_open_channel_res(res);
+                    taker
+                })
+                .expect("taker exists");
+
+            Ok::<TakerState, warp::Rejection>(taker_updated_state.clone())
+        });
+
+    let send_payment = path!("pay")
+        // .and(warp::body::json())
+        .and_then(|| async {
+
+        });
+
+    let taker_path = path!("taker")
+        .and(take_order);
+
     warp::serve(
-        path!("hello" / String).map(|name| format!("Hello, {}!", name))
-        .or(path!("state" / String).map(get_market_state))
+        warp::post2().and(maker_path.or(taker_path))
     )
-    .run(([127, 0, 0, 1], 3030));
+    .run(([127, 0, 0, 1], 3030)).await;
 }
