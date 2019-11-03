@@ -31,6 +31,7 @@ use crate::message::{
     OpenMarketState
 };
 use crate::math;
+use crate::MarketData;
 
 macro_rules! measure_one_arg {
     ($x: expr) => {
@@ -54,6 +55,8 @@ pub struct MakerState {
     pub initial_margin: i64,
     pub order_size: Option<i64>,
     pub available_margin: i64,
+    pub market_data: Option<MarketData>,
+    pub prev_market_data: Option<MarketData>
 }
 
 pub trait Maker {
@@ -62,7 +65,6 @@ pub trait Maker {
     fn recv_open_channel_req(&mut self, req: OpenChannelRequest) -> OpenChannelResponse;
     fn recv_payment_req(&mut self, req: PaymentRequest) -> PaymentResponse;
     fn recv_generate_payment_token_req(&mut self, req: GeneratePaymentTokenRequest) -> GeneratePaymentTokenResponse;
-    fn compute_payment(market: &mut OpenMarketState, current_index_price: f64, position_size: i64) -> i64;
 }
 
 impl Maker for MakerState {
@@ -81,6 +83,8 @@ impl Maker for MakerState {
             initial_margin,
             order_size: None,
             available_margin: initial_margin,
+            market_data: None,
+            prev_market_data: None,
         }
     }
 
@@ -141,17 +145,14 @@ impl Maker for MakerState {
         let PaymentRequest {
             payment_proof
         } = req;
-
-        // Get open market data
-        let mut open_market_state = OpenMarketState {
-            last_index_price: 100.0_f64
-        };
-        let current_index_price = 110.0_f64;
         
         // compute payment
-        let payment = math::compute_payment(&mut open_market_state, current_index_price, self.order_size.expect("Order exists if payment received"));
+        let market_data = self.market_data.clone().expect("must have market data");
+        let prev_market_data = self.prev_market_data.clone().expect("must have market data");
+        let position_size = self.order_size.clone().expect("Order exists if payment received");
+        let payment = math::compute_payment(market_data, prev_market_data, position_size);
         // Verify amount
-        if payment != payment_proof.amount {
+        if payment != payment_proof.amount { // TODO add some tolerance specified in the contract, e.g. a few cents of difference, can average values or dispute
             panic!("Payment expected {} received {}", payment, payment_proof.amount)
         }
 
@@ -186,12 +187,5 @@ impl Maker for MakerState {
         GeneratePaymentTokenResponse {
             payment_token
         }
-    }
-
-    fn compute_payment(market: &mut OpenMarketState, current_index_price: f64, position_size: i64) -> i64 {
-        let change_in_price = current_index_price - market.last_index_price;
-        let profit_or_loss = (position_size as f64) * change_in_price / market.last_index_price;
-        market.last_index_price = current_index_price;
-        profit_or_loss as i64
     }
 }

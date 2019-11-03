@@ -35,6 +35,7 @@ use crate::message::{
     OpenMarketState
 };
 use crate::math;
+use crate::MarketData;
 
 
 // macro_rules! measure_one_arg {
@@ -71,7 +72,9 @@ pub struct TakerState {
     pub order_size: i64,
     pub available_margin: i64,
     pub new_customer_state: Option<CustomerState<Bls12>>,
-    pub revoke_token: Option<RevokeToken>
+    pub revoke_token: Option<RevokeToken>,
+    pub market_data: Option<MarketData>,
+    pub prev_market_data: Option<MarketData>
 }
 
 impl warp::Reply for TakerState {
@@ -128,6 +131,8 @@ impl Taker for TakerState {
             order_size,
             available_margin: initial_margin,
             revoke_token: None,
+            market_data: None,
+            prev_market_data: None,
         }
     }
 
@@ -169,14 +174,22 @@ impl Taker for TakerState {
 
     fn send_payment_req(&mut self) -> PaymentRequest {
         let rng = &mut rand::thread_rng();
-        // Get open market data
-        let mut open_market_state = OpenMarketState {
-            last_index_price: 100.0_f64
-        };
-        let current_index_price = 110.0_f64;
         
         // compute payment
-        let payment = math::compute_payment(&mut open_market_state, current_index_price, self.order_size);
+        let market_data = self.market_data.clone().expect("must have market data");
+        let prev_market_data = self.prev_market_data.clone().expect("must have market data");
+        let position_size = self.order_size.clone();
+        let change_in_price = market_data.bitcoin.usd - prev_market_data.bitcoin.usd; // change in USD
+        println!("Change in price: {}", change_in_price);
+        let percent_change_in_price = change_in_price / prev_market_data.bitcoin.usd;
+        println!("Percent change in price: {}", change_in_price);
+        let payment = math::compute_payment(market_data, prev_market_data, position_size);
+
+        if payment > 0 {
+            println!("^^UP^^ {} Taker pays Maker! {} in Cosmos (ATOM, Terra, etc) collateral", percent_change_in_price, payment)
+        } else {
+            println!("__DOWN__ {} Maker pays Taker! ({}) in Cosmos (ATOM, Terra, etc) collateral", percent_change_in_price, -payment)
+        }
 
         // generate payment proof
         let (payment_proof, new_customer_state, pay_time) = measure_two_arg!(

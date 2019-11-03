@@ -20,6 +20,7 @@ use warp::{
 };
 // use futures::future::ok;
 // use async_std::future;
+use serde::{Serialize, Deserialize};
 use reqwest::Client;
 use std::sync::{Arc, Mutex};
 use lazy_static::lazy_static;
@@ -42,7 +43,8 @@ use rainboltd::{
         PaymentResponse,
         GeneratePaymentTokenRequest,
         GeneratePaymentTokenResponse
-    }
+    },
+    MarketData
 };
 
 // fn get_market_state(address: String) -> impl Reply {
@@ -275,8 +277,29 @@ async fn main() {
             .or(send_payment)
         );
 
+    let market_path = path!("marketData")
+        .and(warp::body::json())
+        .map(|req: MarketData| {
+            println!("Got new market data! {:?}", req);
+            let taker_slot = TAKER_SLOT.clone();
+            let maker_slot = MAKER_SLOT.clone();
+            let mut maybe_taker = taker_slot.lock().expect("Taker is not poisoned during market data feed");
+            let mut maybe_maker = maker_slot.lock().expect("Maker is not poisoned during market data feed");
+            maybe_taker.as_mut().map(|taker| {
+                taker.prev_market_data = taker.market_data.clone();
+                taker.market_data = Some(req.clone());
+                println!("Updated Taker MarketData!");
+            });
+            maybe_maker.as_mut().map(|maker| {
+                maker.prev_market_data = maker.market_data.clone();
+                maker.market_data = Some(req);
+                println!("Updated Maker MarketData!");
+            });
+            "Success".to_string()
+        });
+
     warp::serve(
-        warp::post2().and(maker_path.or(taker_path))
+        warp::post2().and(maker_path.or(taker_path).or(market_path))
     )
     .run(([127, 0, 0, 1], 3030)).await;
 }
