@@ -85,6 +85,14 @@ pub struct TxFee {
     gas: String
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenOrder {
+    merchant: String,
+    channel_state: String,
+    channel_token: String,
+    
+}
 
 
 
