@@ -28,6 +28,10 @@ use crate::maker::{Maker, MakerState};
 
 const RAINBOW_NODE: &'static str = "http://localhost:1317";
 
+// pub async fn find_merchants() -> Vec<OpenOrders> {
+
+// }
+
 pub async fn get_create_order_tx_to_sign(merchant: String, channel_state: ChannelState<Bls12>, channel_token: ChannelToken<Bls12>, amount: String) -> String {
     let base_req = BaseRequest {
         from: merchant.clone(),
@@ -36,8 +40,8 @@ pub async fn get_create_order_tx_to_sign(merchant: String, channel_state: Channe
 
     let order = CreateOrderReq {
         merchant,
-        channel_state: serde_json::to_string(&channel_state).unwrap(),
-        channel_token: serde_json::to_string(&channel_token).unwrap(),
+        channel_state: base64::encode(&serde_json::to_vec(&channel_state).unwrap()),
+        channel_token: base64::encode(&serde_json::to_vec(&channel_token).unwrap()),
         amount,
         // amount: Coin {
         //     denom: "boofbtc".to_string(),
