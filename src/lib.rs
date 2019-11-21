@@ -18,3 +18,5 @@ pub struct MarketData {
     pub cosmos: MarketPrice
 }
 pub mod cosmos;
+pub mod cosmos;
+pub mod near;
