@@ -3,3 +3,4 @@ pub mod taker;
 pub mod maker;
 pub mod math;
 pub mod cosmos;
+pub mod near;

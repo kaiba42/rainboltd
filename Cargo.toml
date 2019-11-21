@@ -24,4 +24,6 @@ http = "0.1.19"
 lazy_static = "1.4.0"
 base64 = "0.11.0"
 # async-std = "0.99.11"
+cc = "1.0.45"
+near-jsonrpc-client = { git = "https://github.com/nearprotocol/nearcore" }
 

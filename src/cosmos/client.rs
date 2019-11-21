@@ -125,7 +125,7 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn sendTx() {
+    async fn test_send_tx() {
         let merchant = "cosmos1tsffgsxt5pvfyhkfnhep4tvl8t42gywrgn0m6m".to_string();
         // let channel_state = ChannelState::<Bls12>::new("blah".to_string(), false);//Vec::from("jlasdfjklasdflkejlafds".as_bytes());
         // let channel_token = ChannelToken {
@@ -143,7 +143,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn broadcastTx() {
+    async fn test_broadcast_tx() {
         let merchant = "cosmos1tsffgsxt5pvfyhkfnhep4tvl8t42gywrgn0m6m".to_string();
         let maker = MakerState::init(100);
         let unsigned = get_create_order_tx_to_sign(merchant, maker.channel_state, maker.channel_token, "100boofbtc".to_string()).await;
