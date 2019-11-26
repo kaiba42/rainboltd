@@ -17,7 +17,9 @@ rand = "0.6"
 secp256k1 = { version = "0.15.0", features = ["rand", "serde"] }
 ff = { git = "https://github.com/boltlabs-inc/ff", branch = "master" }
 futures = "0.1.29"
+futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
 tokio = "0.2.0-alpha.6"
+tokio_old = { package = "tokio", version = "0.1.22" }
 # reqwest = "0.9.22"
 reqwest = { version = "0.10.0-alpha.1", features = ["json"] }
 http = "0.1.19"
@@ -26,4 +28,9 @@ base64 = "0.11.0"
 # async-std = "0.99.11"
 cc = "1.0.45"
 near-jsonrpc-client = { git = "https://github.com/nearprotocol/nearcore" }
+near-primitives = { git = "https://github.com/nearprotocol/nearcore" }
+near-crypto = { git = "https://github.com/nearprotocol/nearcore" }
+near-network = { git = "https://github.com/nearprotocol/nearcore" }
+borsh = "0.2.9"
+actix = "0.8.2"
 
