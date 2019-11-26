@@ -53,6 +53,38 @@ const ESCROW_CONTRACT: &'static str = "escrow_test2";
 //     res
 // }
 
+macro_rules! json_reqwest {
+    ($req:expr => $client:ident) => {
+        {
+            let res = $client.post(NEAR_NODE)
+                .json(&$req)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json::<Response>()
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::from_value(res.result.map_err(|e| e.message)?)
+                .map_err(|e| e.to_string())?
+        }
+    };
+
+    ($req:expr => $client:ident, $parse:ty) => {
+        {
+            let res = $client.post(NEAR_NODE)
+                .json(&$req)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json::<Response>()
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::from_value::<$parse>(res.result.map_err(|e| e.message)?)
+                .map_err(|e| e.to_string())?
+        }
+    };
+}
+
 pub async fn get_status_nearclient() -> Result<StatusResponse, String> {
     let mut jrpc_client = near_jsonrpc_client::new_client(NEAR_NODE);
     jrpc_client.status().compat().await
@@ -61,18 +93,7 @@ pub async fn get_status_nearclient() -> Result<StatusResponse, String> {
 //// GENERAL NODE RPC ////
 pub async fn get_account_next_nonce(client: &Client, account: String) -> Result<u64, String> {
     let access_key_query = format!("access_key/{}", account);
-    let nonce_req = Message::request("query".to_string(), Some(json!([access_key_query, ""])));
-    let nonce_res = client.post(NEAR_NODE)
-        .json(&nonce_req)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Response>()
-        .await
-        .map_err(|e| e.to_string())?;
-    match serde_json::from_value::<QueryResponse>(nonce_res.result.map_err(|e| e.message)?)
-        .map_err(|e| e.to_string())? 
-    {
+    match json_reqwest!(Message::request("query".to_string(), Some(json!([access_key_query, ""]))) => client) {
         // FIXME should specify which access_key in some way without doing a blind index
         QueryResponse::AccessKeyList(access_keys) => Ok(access_keys[0].access_key.nonce + 1),
         _ => Err("Received incorrect response for AccessKeyList request".to_string())
@@ -80,21 +101,11 @@ pub async fn get_account_next_nonce(client: &Client, account: String) -> Result<
 }
 
 pub async fn get_status(client: &Client) -> Result<StatusResponse, String> {
-    let status_req = Message::request("status".to_string(), None);
-    let status_res = client.post(NEAR_NODE)
-        .json(&status_req)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Response>()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::from_value::<StatusResponse>(status_res.result.map_err(|e| e.message)?)
-        .map_err(|e| e.to_string())?)
+    Ok(json_reqwest!(Message::request("status".to_string(), None) => client))
 }
 
 pub async fn get_last_block_hash(client: &Client) -> Result<CryptoHash, String> {
-    Ok(get_status(&client).await?
+    Ok(get_status(client).await?
         .sync_info
         .latest_block_hash)
 }
@@ -102,17 +113,7 @@ pub async fn get_last_block_hash(client: &Client) -> Result<CryptoHash, String> 
 pub async fn broadcast_tx(client: &Client, signed_tx: &mut SignedTransaction) -> Result<FinalExecutionOutcomeView, String> {
     signed_tx.init();
     let tx = signed_tx.try_to_vec().map_err(|e| e.to_string())?;
-    let escrow_req = Message::request("broadcast_tx_commit".to_string(), Some(json!([to_base64(&tx)])));
-    let escrow_res = client.post(NEAR_NODE)
-        .json(&escrow_req)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Response>()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::from_value::<FinalExecutionOutcomeView>(escrow_res.result.map_err(|e| e.message)?)
-        .map_err(|e| e.to_string())?)
+    Ok(json_reqwest!(Message::request("broadcast_tx_commit".to_string(), Some(json!([to_base64(&tx)]))) => client))
 }
 
 //// ESCROW SPECIFIC RPC ////
@@ -152,18 +153,7 @@ pub async fn escrow_fill(client: &Client, signer: &InMemorySigner, amount: u128)
 
 pub async fn show_liquidity(client: &Client) -> Result<Vec<MerchantPool>, String> {
     let query = format!("call/{}/show_liquidity", ESCROW_CONTRACT);
-    let query_req = Message::request("query".to_string(), Some(json!([query, ""])));
-    let query_res = client.post(NEAR_NODE)
-        .json(&query_req)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Response>()
-        .await
-        .map_err(|e| e.to_string())?;
-    match serde_json::from_value::<QueryResponse>(query_res.result.map_err(|e| e.message)?)
-        .map_err(|e| e.to_string())? 
-    {
+    match json_reqwest!(Message::request("query".to_string(), Some(json!([query, ""]))) => client) {
         // FIXME should specify which access_key in some way without doing a blind index
         QueryResponse::CallResult(result) => Ok(serde_json::from_slice(&result.result).map_err(|e| e.to_string())?),
         _ => Err("Received incorrect response for AccessKeyList request".to_string())
