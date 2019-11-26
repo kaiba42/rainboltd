@@ -1,24 +1,26 @@
 use serde::{Serialize, Deserialize};
 use bolt::channels::{ChannelState, ChannelToken};
+use bolt::ped92::Commitment;
 use pairing::bls12_381::Bls12;
 use secp256k1::PublicKey;
+
 
 #[derive(Serialize, Deserialize)]
 pub struct EscrowFillMessage {
     pub merchant: String,
-    pub customer_bls: String,
-    pub wallet_commit: Vec<u8>,
+    pub customer_bls: PublicKey,
+    pub wallet_commit: Vec<u8>, //Commitment<Bls12>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct EscrowLiquidityMessage {
     pub merchant_bls: PublicKey,
-    pub channel_state: ChannelState<Bls12>,
-    pub channel_token: ChannelToken<Bls12>,
+    pub channel_state: String, //ChannelState<Bls12>,
+    pub channel_token: String, //ChannelToken<Bls12>,
 }
 
 // Should get imported from rainbolt_near_chain crate
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MerchantPool {
     pub total: u128,
     pub available: u128,
@@ -31,7 +33,7 @@ pub struct MerchantPool {
     pub escrows: Vec<EscrowAccount>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct EscrowAccount {
     pub amount: u128,
     pub customer: String,
