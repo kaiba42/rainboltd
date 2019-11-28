@@ -1,9 +1,10 @@
+use crate::chain_clients::{MerchantPool, EscrowAccount};
+
 use serde::{Serialize, Deserialize};
 use bolt::channels::{ChannelState, ChannelToken};
 use bolt::ped92::Commitment;
 use pairing::bls12_381::Bls12;
 use secp256k1::PublicKey;
-
 
 #[derive(Serialize, Deserialize)]
 pub struct EscrowFillMessage {
@@ -21,7 +22,7 @@ pub struct EscrowLiquidityMessage {
 
 // Should get imported from rainbolt_near_chain crate
 #[derive(Serialize, Deserialize, Debug)]
-pub struct MerchantPool {
+pub struct NearMerchantPool {
     pub total: u128,
     pub available: u128,
     // address: String,
@@ -30,70 +31,40 @@ pub struct MerchantPool {
     pub channel_state: String,
     // JSON
     pub channel_token: String,
-    pub escrows: Vec<EscrowAccount>,
+    pub escrows: Vec<NearEscrowAccount>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct EscrowAccount {
+pub struct NearEscrowAccount {
     pub amount: u128,
     pub customer: String,
     pub customer_bls: String,
     pub wallet_commit: Vec<u8>,
 }
 
-// #[derive(Serialize, Deserialize, Debug)]
-// #[serde(rename_all = "camelCase")]
-// struct NearStatusRequest {
-//     id: String,
-//     jsonrpc: String,
-//     method: String,
-//     params: Vec<u8>,
-// }
+// TODO implement TryFrom for decoding message error handling
+impl From<NearMerchantPool> for MerchantPool {
+    fn from(near_merchant_pool: NearMerchantPool) -> MerchantPool {
+        let NearMerchantPool { total, available, bls_pub_key, channel_state, channel_token, escrows } = near_merchant_pool;
+        MerchantPool {
+            total,
+            available,
+            bls_pub_key,
+            channel_state: serde_json::from_slice(&base64::decode(&channel_state).unwrap()).unwrap(),
+            channel_token: serde_json::from_slice(&base64::decode(&channel_token).unwrap()).unwrap(),
+            escrows: escrows.into_iter().map(|near_escrow| EscrowAccount::from(near_escrow)).collect(),
+        }
+    }
+}
 
-// #[derive(Deserialize, Debug)]
-// struct NearSyncInfo {
-//     latest_block_hash: String,
-//     latest_block_height: u64,
-//     latest_block_time: String,
-//     latest_state_root: String,
-//     syncing: bool,
-// }
-
-// #[derive(Deserialize, Debug)]
-// struct NearValidatorInfo {
-//     account_id: String,
-//     is_slashed: bool,
-// }
-
-// #[derive(Deserialize, Debug)]
-// struct NearVersionInfo {
-//     build: String,
-//     version: String,
-// }
-
-// #[derive(Deserialize, Debug)]
-// struct NearStatusResultBody {
-//     chain_id: String,
-//     rpc_addr: String,
-//     sync_info: NearSyncInfo,
-//     validators: Vec<NearValidatorInfo>,
-//     version: NearVersionInfo,
-// }
-
-// #[derive(Deserialize, Debug)]
-// struct NearStatusResult {
-//     id: String,
-//     jsonrpc: String,
-//     result: NearStatusResultBody,
-// }
-
-// impl Default for NearStatusRequest {
-//     fn default() -> Self {
-//         NearStatusRequest {
-//             id: "rainboltd".to_string(),
-//             jsonrpc: "2.0".to_string(),
-//             method: "status".to_string(),
-//             params: Vec::new(),
-//         }
-//     }
-// }
+impl From<NearEscrowAccount> for EscrowAccount {
+    fn from(near_escrow: NearEscrowAccount) -> EscrowAccount {
+        let NearEscrowAccount { amount, customer, customer_bls, wallet_commit } = near_escrow;
+        EscrowAccount {
+            amount,
+            customer,
+            customer_bls,
+            wallet_commit,
+        }
+    }
+}
