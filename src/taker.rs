@@ -3,11 +3,13 @@ use bolt::{
     ped92::{Commitment, CommitmentProof},
     bidirectional::{
         RevokeToken,
+        ChannelcloseC,
         init_customer,
         establish_customer_generate_proof,
         establish_customer_final,
         generate_payment_proof,
         generate_revoke_token,
+        customer_close,
     },
     channels::{
         ChannelState,
@@ -97,6 +99,7 @@ pub trait Taker {
     fn recv_payment_res(&mut self, res: PaymentResponse);
     fn send_generate_payment_token_req(&mut self) -> GeneratePaymentTokenRequest;
     fn recv_generate_payment_token_res(&mut self, res: GeneratePaymentTokenResponse);
+    fn get_close_message(&self) -> ChannelcloseC<Bls12>;
 }   
 
 impl Taker for TakerState {
@@ -248,5 +251,10 @@ impl Taker for TakerState {
         } = res;
         assert!(self.customer_state.verify_pay_token(&self.channel_state, &payment_token));
         println!("Generated payment_token is valid!");
+    }
+
+    fn get_close_message(&self) -> ChannelcloseC<Bls12> {
+        println!("Generating Customer Channel Close Message");
+        customer_close(&self.channel_state, &self.customer_state)
     }
 }

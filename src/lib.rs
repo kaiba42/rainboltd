@@ -5,6 +5,10 @@ pub mod taker;
 pub mod maker;
 pub mod math;
 // pub mod price_feed;
+pub mod chain_clients;
+pub mod near;
+pub mod cosmos;
+pub mod config;
 
 use serde::{Serialize, Deserialize};
 use std::fmt::Debug;
@@ -19,6 +23,3 @@ pub struct MarketData {
     pub bitcoin: MarketPrice,
     pub cosmos: MarketPrice
 }
-pub mod chain_clients;
-pub mod near;
-pub mod cosmos;

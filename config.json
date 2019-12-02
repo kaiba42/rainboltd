@@ -1,0 +1,10 @@
+{
+    "chains": [
+        {
+            "chain_id": "near",
+            "account_id": "taker_a",
+            "secret_key": "ed25519:5pW1YmiLTkoFYByEJuuTdp1EW6AgYhbFwNnQoJbVznzxw4HCiF2Hce2p128ow1iyf7fobSa4ZSdSdPykwRXsFWzy"
+        }
+    ],
+    "channel_ip": "http://localhost:3031"
+}

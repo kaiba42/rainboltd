@@ -3,8 +3,17 @@ use crate::chain_clients::{MerchantPool, EscrowAccount};
 use serde::{Serialize, Deserialize};
 use bolt::channels::{ChannelState, ChannelToken};
 use bolt::ped92::Commitment;
+use bolt::bidirectional::ChannelcloseC;
 use pairing::bls12_381::Bls12;
 use secp256k1::PublicKey;
+use near_crypto::SecretKey as NearSecretKey;
+
+#[derive(Serialize, Deserialize)]
+pub struct LocalAccountKeyFile {
+    pub account_id: String,
+    #[serde(alias = "private_key")]
+    pub secret_key: NearSecretKey,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct EscrowFillMessage {
@@ -20,7 +29,20 @@ pub struct EscrowLiquidityMessage {
     pub channel_token: String, //ChannelToken<Bls12>,
 }
 
-// Should get imported from rainbolt_near_chain crate
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChannelCloseCustomer {
+    pub merchant: String,
+    pub channel_close: NearChannelClose, //ChannelcloseC<Bls12>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NearChannelClose {
+    pub wpk: Vec<u8>,
+    pub message: String, //bolt::wallet::Wallet<Bls12>,
+    pub signature: Vec<u8>,//bolt::cl::Signature<Bls12>,
+}
+
+// TODO Should get imported from rainbolt_near_chain crate
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NearMerchantPool {
     pub total: u128,

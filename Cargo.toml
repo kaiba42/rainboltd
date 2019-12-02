@@ -1,7 +1,7 @@
 [package]
 name = "rainboltd"
 version = "0.1.0"
-authors = ["Kai Aichholz <kaiba@alum.mit.edu>"]
+authors = ["Kai Aichholz <kaiba@alum.mit.edu>", "Julian Aichholz <julianaichholz@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,9 +19,6 @@ ff = { git = "https://github.com/boltlabs-inc/ff", branch = "master" }
 futures = { version = "0.3.1", features = ["async-await"] }
 async-trait = "0.1.19"
 tokio = "0.2.0-alpha.6"
-
-
-tokio_old = { package = "tokio", version = "0.1.22" }
 # reqwest = "0.9.22"
 reqwest = { version = "0.10.0-alpha.1", features = ["json"] }
 http = "0.1.19"
@@ -35,4 +32,4 @@ near-crypto = { git = "https://github.com/nearprotocol/nearcore" }
 near-network = { git = "https://github.com/nearprotocol/nearcore" }
 borsh = "0.2.9"
 actix = "0.8.2"
-
+clap = "2.33.0"

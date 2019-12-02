@@ -2,10 +2,13 @@ use crate::maker::{Maker, MakerState};
 use crate::taker::{Taker, TakerState};
 use crate::chain_clients::{ChainClient, MerchantPool};
 use super::model::{
+    LocalAccountKeyFile,
     EscrowFillMessage,
     EscrowLiquidityMessage,
     NearEscrowAccount,
-    NearMerchantPool
+    NearMerchantPool,
+    NearChannelClose,
+    ChannelCloseCustomer,
 };
 
 use near_jsonrpc_client::message::{Message, Request, Response};
@@ -34,6 +37,7 @@ use borsh::BorshSerialize;
 use reqwest::Client;
 use bolt::channels::{ChannelState, ChannelToken};
 use bolt::ped92::Commitment;
+use bolt::bidirectional::ChannelcloseC;
 use pairing::bls12_381::Bls12;
 use secp256k1;
 
@@ -43,6 +47,8 @@ use async_trait::async_trait;
 use futures::try_join;
 
 use std::{path::Path};
+use std::fs::File;
+use std::io::Read;
 use std::str::FromStr; // Remove Me
 
 const NEAR_NODE: &'static str = "http://localhost:3030";
@@ -65,6 +71,7 @@ macro_rules! json_reqwest {
     };
 }
 
+#[derive(Clone)]
 pub struct NearChainClient {
     client: Client,
     signer: InMemorySigner,
@@ -84,30 +91,48 @@ impl NearChainClient {
             signer: InMemorySigner::from_file(key_file)
         }
     }
+
+    pub fn from_local_account_file(client: Client, key_file: &Path) -> Self {
+        let mut file = File::open(key_file).expect("Could not open account file");
+        let mut content = String::new();
+        file.read_to_string(&mut content).expect("Could not read from account file");
+        let local_key_file = serde_json::from_str::<LocalAccountKeyFile>(&content).expect("Failed to deserialize LocalAccountKeyFile");
+        NearChainClient::from_secret_key(client, local_key_file.account_id, local_key_file.secret_key)
+    }
 }
 
 #[async_trait]
 impl ChainClient for NearChainClient {
     async fn sign_and_send_liquidity_msg(&self, maker_state: &MakerState, amount: u128) -> Result<String, String> {
         match escrow_liquidity(&self.client, &self.signer, maker_state, amount).await?.status {
-            FinalExecutionStatus::SuccessValue(success) => Ok(success),
+            FinalExecutionStatus::SuccessValue(ref success) => serde_json::from_slice(&base64::decode(success).unwrap()).unwrap_or(Ok("Could not deserialize json result from chain".to_string())), // FIXME unwrap
+            FinalExecutionStatus::Failure(error) => Err(format!("NEAR Error: {} / {}", error.error_type, error.error_message)),
             _ => unimplemented!()
         }
     }
 
     async fn sign_and_send_fill_msg(&self, taker_state: &TakerState, merchant: String, amount: u128) -> Result<String, String> {
         match escrow_fill(&self.client, &self.signer, taker_state, merchant, amount).await?.status {
-            FinalExecutionStatus::SuccessValue(success) => Ok(success),
+            FinalExecutionStatus::SuccessValue(ref success) => serde_json::from_slice(&base64::decode(success).unwrap()).unwrap_or(Ok("Could not deserialize json result from chain".to_string())), // FIXME unwrap
+            FinalExecutionStatus::Failure(error) => Err(format!("NEAR Error: {} / {}", error.error_type, error.error_message)),
             _ => unimplemented!()
         }
     }
 
-    async fn show_liquidity(&self) -> Result<Vec<MerchantPool>, String> {
+    async fn show_liquidity(&self) -> Result<Vec<(String, MerchantPool)>, String> {
         Ok(show_liquidity(&self.client)
             .await?
             .into_iter()
-            .map(|pool| MerchantPool::from(pool))
+            .map(|(account_id, pool)| (account_id, MerchantPool::from(pool)))
             .collect())
+    }
+
+    async fn close_escrow_taker(&self, merchant: String, channel_close: ChannelcloseC<Bls12>) -> Result<String, String> {
+        match close_escrow_customer(&self.client, &self.signer, merchant, channel_close).await?.status {
+            FinalExecutionStatus::SuccessValue(ref success) => Ok(String::from_utf8(base64::decode(success).unwrap()).unwrap()),
+            FinalExecutionStatus::Failure(error) => Err(format!("NEAR Error: {} / {}", error.error_type, error.error_message)),
+            _ => unimplemented!()
+        }
     }
 }
 
@@ -133,6 +158,7 @@ async fn get_last_block_hash(client: &Client) -> Result<CryptoHash, String> {
 
 async fn broadcast_tx(client: &Client, signed_tx: &mut SignedTransaction) -> Result<FinalExecutionOutcomeView, String> {
     signed_tx.init();
+    println!("NEAR Tx hash: {}", signed_tx.get_hash());
     let tx = signed_tx.try_to_vec().map_err(|e| e.to_string())?;
     Ok(json_reqwest!(Message::request("broadcast_tx_commit".to_string(), Some(json!([to_base64(&tx)]))) => client))
 }
@@ -165,6 +191,7 @@ async fn escrow_liquidity(client: &Client, signer: &InMemorySigner, maker_state:
         block_hash
     );
 
+    println!("Broadcasting escrow liquidity Tx.");
     broadcast_tx(client, &mut signed_tx).await
 }
 
@@ -194,16 +221,51 @@ async fn escrow_fill(client: &Client, signer: &InMemorySigner, taker_state: &Tak
         block_hash
     );
 
+    println!("Broadcasting Escrow Fill Tx.");
     broadcast_tx(client, &mut signed_tx).await
 }
 
-async fn show_liquidity(client: &Client) -> Result<Vec<NearMerchantPool>, String> {
+async fn show_liquidity(client: &Client) -> Result<Vec<(String, NearMerchantPool)>, String> {
     let query = format!("call/{}/show_liquidity", ESCROW_CONTRACT);
     match json_reqwest!(Message::request("query".to_string(), Some(json!([query, ""]))) => client) {
         // FIXME should specify which access_key in some way without doing a blind index
         QueryResponse::CallResult(result) => Ok(serde_json::from_slice(&result.result).map_err(|e| e.to_string())?),
         _ => Err("Received incorrect response for AccessKeyList request".to_string())
     }
+}
+
+async fn close_escrow_customer(client: &Client, signer: &InMemorySigner, merchant: String, channel_close: ChannelcloseC<Bls12>) -> Result<FinalExecutionOutcomeView, String> {
+    let account = signer.account_id.clone();
+    let (nonce, block_hash) = futures::try_join!(get_account_next_nonce(&client, account.clone()), get_last_block_hash(&client))?;
+
+    let message = ChannelCloseCustomer {
+        merchant,
+        channel_close: NearChannelClose {
+            wpk: serde_json::to_vec(&channel_close.wpk).unwrap(),
+            message: base64::encode(&serde_json::to_vec(&channel_close.message).unwrap()),
+            signature: serde_json::to_vec(&channel_close.signature).unwrap(),
+        },
+    };
+    let args = serde_json::to_vec(&message).unwrap();
+
+    println!("{:?}", serde_json::from_slice::<ChannelCloseCustomer>(&args).unwrap());
+
+    let mut signed_tx = SignedTransaction::from_actions(
+        nonce,
+        account,
+        ESCROW_CONTRACT.to_string(),
+        signer,
+        vec![Action::FunctionCall(FunctionCallAction {
+            method_name: "close_escrow_customer".to_string(),
+            args,
+            gas: 1000000000,
+            deposit: 0,
+        })],
+        block_hash
+    );
+
+    println!("Broadcasting Close Tx");
+    broadcast_tx(client, &mut signed_tx).await
 }
 
 #[cfg(test)]
@@ -222,7 +284,7 @@ mod test {
     #[tokio::test]
     //#[test]
     async fn send_liquidity_message() {
-        let amount = 50;
+        let amount = 10000;
         let maker = MakerState::init(amount);
         let client = Client::new();
         let signer = InMemorySigner::from_file(&Path::new("/Users/julian/SFBW_WORKSHOP/rainbolt_near_chain/neardev/default/rainbolt_dev.json"));
@@ -230,7 +292,8 @@ mod test {
         let res = escrow_liquidity(&client, &signer, &maker, amount as u128).await;
         println!("RES: {:?}", res);
         assert!(res.is_ok());
-        assert_eq!(res.unwrap().status, FinalExecutionStatus::SuccessValue(base64::encode("\"Success\"")));
+        // assert_eq!(res.unwrap().status, FinalExecutionStatus::SuccessValue(base64::encode("\"Success\"")));
+        assert_eq!(res.unwrap().status, FinalExecutionStatus::SuccessValue(base64::encode("")));
     }
 
     #[tokio::test]
@@ -238,7 +301,7 @@ mod test {
     async fn deserialize_liquidity() {
         let client = Client::new();
         let liquidity = show_liquidity(&client).await.unwrap();
-        let pool2 = &liquidity[2];
+        let (_, pool2) = &liquidity[0];
         let channel_state: ChannelState<Bls12> = serde_json::from_slice(&base64::decode(&pool2.channel_state).unwrap()).unwrap();
         let channel_token: ChannelToken<Bls12> = serde_json::from_slice(&base64::decode(&pool2.channel_token).unwrap()).unwrap();
         // R: i32,
@@ -256,13 +319,34 @@ mod test {
     async fn send_fill_message() {
         let client = Client::new();
         let liquidity = show_liquidity(&client).await.unwrap();
-        let MerchantPool { channel_state, channel_token, available: amount, ..} = MerchantPool::from(liquidity.into_iter().nth(2).unwrap());
-
-        let signer = InMemorySigner::from_file(&Path::new("/Users/julian/SFBW_WORKSHOP/rainbolt_near_chain/neardev/default/rainbolt_dev.json"));
-
-        let taker = TakerState::init(amount as i64, amount as i64, channel_state, channel_token);
+        let MerchantPool { channel_state, channel_token, available: amount, ..} = MerchantPool::from(liquidity.into_iter().nth(0).unwrap().1);
         
-        let res = escrow_fill(&client, &signer, &taker, "rainbolt_dev".to_string(), amount).await;
+        let near_client = NearChainClient::from_local_account_file(client, &Path::new("/Users/julian/SFBW_WORKSHOP/rainbolt_near_dev/neardev/local/merchant_a.json"));
+        // let signer = InMemorySigner::from_file(&Path::new("/Users/julian/SFBW_WORKSHOP/rainbolt_near_chain/neardev/local/merchant_a.json"));
+
+        let taker = TakerState::init(100, 100, channel_state, channel_token);
+        
+        // let res = escrow_fill(&client, &signer, &taker, "rainbolt_dev".to_string(), 100).await;
+        let res = near_client.sign_and_send_fill_msg(&taker, "rainbolt_dev".to_string(), 100).await;
         println!("RES: {:?}", res);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "Success".to_string())
+    }
+
+    #[tokio::test]
+    //#[test]
+    async fn fail_fill_message() {
+        let client = Client::new();
+        let liquidity = show_liquidity(&client).await.unwrap();
+        let MerchantPool { channel_state, channel_token, available: amount, ..} = MerchantPool::from(liquidity.into_iter().nth(0).unwrap().1);
+        
+        let near_client = NearChainClient::from_local_account_file(client, &Path::new("/Users/julian/SFBW_WORKSHOP/rainbolt_near_dev/neardev/local/merchant_a.json"));
+
+        let taker = TakerState::init(100, 100, channel_state, channel_token);
+        
+        let res = near_client.sign_and_send_fill_msg(&taker, "rainbolt_dev".to_string(), 0).await;
+        println!("RES: {:?}", res);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "Escrow Failure: amount must be greater than 0".to_string())
     }
 }

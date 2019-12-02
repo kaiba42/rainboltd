@@ -55,4 +55,5 @@ pub struct OrderRequest {
     pub initial_margin: i64, 
     pub order_size: i64, 
     pub maker_order_id: String,
+    pub chain: String,
 }

@@ -1,2 +1,4 @@
-pub mod model;
-pub mod client;
+mod model;
+mod client;
+
+pub use self::client::NearChainClient;

@@ -19,6 +19,7 @@ use rand;
 use pairing::bls12_381::Bls12;
 use serde::{Serialize, Deserialize};
 use std::time::Instant;
+use http::header::{HeaderValue, CONTENT_TYPE};
 
 // Internal
 use crate::message::{
@@ -44,7 +45,7 @@ macro_rules! measure_one_arg {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct MakerState {
     pub channel_id: Option<<Bls12 as ff::ScalarEngine>::Fr>,
     pub channel_token: ChannelToken<Bls12>,
@@ -57,6 +58,17 @@ pub struct MakerState {
     pub available_margin: i64,
     pub market_data: Option<MarketData>,
     pub prev_market_data: Option<MarketData>
+}
+
+impl warp::Reply for MakerState {
+    fn into_response(self) -> warp::reply::Response {
+        let body = serde_json::to_vec(&self).expect("MakerState failed to serialize");
+        let mut res = warp::reply::Response::new(body.into());
+        res
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        res
+    }
 }
 
 pub trait Maker {
